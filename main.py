@@ -8,8 +8,25 @@
 import customtkinter as ctk
 import tkinter as tk
 from tkinter import messagebox
-import sqlite3, os
+import sqlite3, os, sys
 from datetime import datetime
+import ctypes
+
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        # IMPORTANT: It must have the underscore: _MEIPASS
+        base_path = sys._MEIPASS 
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+try:
+    myappid = 'mycompany.myproduct.subproduct.version' # arbitrary string
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+except:
+    pass
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  CONSTANTS
@@ -24,7 +41,12 @@ TOPPERS_PER_SET = {
     "Awakened Worlds": 1,
     "Divine Chaos":    2,
 }
-DB_FILE        = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vcard_tracker.db")
+if getattr(sys, 'frozen', False):
+    base_dir = os.path.dirname(sys.executable)
+else:
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+
+DB_FILE        = os.path.join(base_dir, "vcard_tracker.db")
 SETS           = ["Rising Stars", "Awakened Worlds", "Divine Chaos"]
 
 RARITIES = [
@@ -271,7 +293,7 @@ def _build_dc():
         cards.append((name, "10"))
     dc_mascots = [
         "ATLAS","ABYSSAL GUUMI","WOODCHAT","TONIE","RANCID & GLITCHY",
-        "TOANY","CHILLBOT","LITTLE CROC","BEEPU","SYKKCAT",
+        "TOANY","CHILLBOT","LITTLE CORC","BEEPU","SYKKCAT",
         "SPIKE","FROGLODYTES","WHISPER","SMUGGLER","RAWR XD",
         "RAMBIT","GLOWSTICKS","BAOBBLE BUDDY","BUNNERD","ONIFAN",
         "GECKOS","BANDIT & ACE","BORIS","GASPAR & SKELTER","UNIDENTIFIED FLYING MOTH",
@@ -333,6 +355,104 @@ CARD_DB: dict = {
     "Rising Stars":    _build_rs(),
     "Divine Chaos":    _build_dc(),
 }
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  VTUBER MAP  (Mascot name → 8/9 VTuber name, per set, positional)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _build_vtuber_map():
+    aw_mascots = [
+        "FLUFFER","B (SHARK MODE)","SPIKE","FIRST MATE OLLIE","LIMON",
+        "IKAMARU","POOL PARTY DROID","RAWR XD","BUNNERD","ONIFAN",
+        "KOGA","BOOMI","FEET FEET","FREAKBOT","AXEL",
+        "KATTENS","YOLK","SPOOF","POKATTO","SHOCKED MIMI",
+        "TRICKSTER","BAOBBLE BUDDY","FROGLODYTES","BABY MOTH","HAZE",
+        "ASTRO","NOBU","BLOCKHEADS","FOREST OLLIE","GUILDIE",
+        "SUKOPATH","TOMANIAC","BURNT PUP","CIMP","CUTIE PIE",
+        "GIGA GAMBLIN","BANDIT & ACE","GUUMI","DARK DEMONITE","YAKIMONO",
+        "PETAL PALS","GARY","CLEO","LABCHAT","SCUFFLING",
+        "GLOWSTICK","D.A.D (DOKI AMBER DOGE)","BRO","METAL BRADLEY","BENSON",
+        "GORO","CERBERUS","NOODLE",
+    ]
+    aw_89 = [
+        "COTTONTAILVA","CYYU (SHARK MODE)","FREAM","CAPTAIN HANNAH","LAIMU",
+        "POSEIDON","RAINHOE","SPITE","YENKO","AKUMI",
+        "YUZU, LADY OF THE LAKE","DEME","FEFE","HEAVENLY","KOKONUTS",
+        "OBKATIEKAT","EGG","SHYLILY","SQUCHAN","TOTLESS",
+        "GHOST TRICKYWI","SPRING BAO","FROGGYLOCH","JUNIPER ACTIAS","GARDEN KEEPER SKY",
+        "MILKY","ONIKANZEI","PORCELAINMAID","SANSIN","GARDENER SHOTO",
+        "SUKO","TOMA","CAMPFIRE BUFFPUP","CAMILA","CHACHAYOURVMOM",
+        "GAMBLER DYA RIKKU","ELLY","IKUMI","LUCY PYRE","NANOLESS",
+        "SUN GODDESS SILVERVALE","VEI","VEXORIA THE SUN EATER","AICANDII","AMALEE",
+        "ARIELLE","CROWKI","EIN","LORD AETHELSTAN","NUMI 4.0",
+        "NYANNERS","SARUEI","VIENNA",
+    ]
+    rs_mascots = [
+        "MONARCH'S MESSENGER CLONE","PESTONINI","GRUB","BRO","FROGLODYTE",
+        "SASHIMI","GORO","ORCA PUP","PUP","TAD & CANNOLI",
+        "DRAGOONS","LIMON","MEATHEAD","PETAL PALS","BATSARD CAT",
+        "FARMER COSMATE","RANCID","BRADLES","BENSON","CHABBIT",
+        "SMOLCCI","TRICKY","PYRO PUP","LAMPCHAMP","POTAT",
+        "FLUFFER","B","BABY MOTH","DEMONITE","ELECTROBYTES",
+        "DROID","HAZE","GUILDIE","CIMP","CHATBLIN",
+        "SPIKE","EVILBOT","CHIBI LAYNA","NANOMONO","OLLIE",
+        "MIMI","TENKI",
+    ]
+    rs_89 = [
+        "MONARCH","BAO THE WHALE","EBIKO","FOXYREINE","FROGGYLOCH",
+        "MEGALODONVT","NYANNERS","SHYLILY","BUFFPUP","COQUI",
+        "DOKI'S TRUE FORM","LAIMU","MEAT","SILVERVALE","TOB",
+        "FARMER VIENNA","FEFE","LORD AETHELSTAN","UNIVERSITY NUMI","PUNKALOPI",
+        "AKUMI","PIRATE TRICKYWI","SINDER","YUZU","CIDEMIKO",
+        "COTTONTAILVA","CYYU","YUNIPER ACTIAS","LUCY PYRE","QUINN BENET",
+        "RAINHOE","SKY","SHOTO","CAMILA","DYA RIKKU",
+        "FREAM","HEAVENLY FATHER","LAYNA LAZAR","NANOLESS","SANSIN",
+        "TOTLESS","VEI",
+    ]
+    dc_mascots = [
+        "ATLAS","ABYSSAL GUUMI","WOODCHAT","TONIE","RANCID & GLITCHY",
+        "TOANY","CHILLBOT","LITTLE CORC","BEEPU","SYKKCAT",
+        "SPIKE","FROGLODYTES","WHISPER","SMUGGLER","RAWR XD",
+        "RAMBIT","GLOWSTICKS","BAOBBLE BUDDY","BUNNERD","ONIFAN",
+        "GECKOS","BANDIT & ACE","BORIS","GASPAR & SKELTER","UNIDENTIFIED FLYING MOTH",
+        "BATSARD CAT","CIMP","TRICKYWI'S GHOSTS","CLUMSY MIMI","FLUFFER",
+        "h4ND-0325","JOVIAL DOKIMENT","EVIL PUP","WIGGLER","JARED",
+        "BENSON","GORO","MEGACORP DROID","SQUISHIES","GZ-MG0 HARBINGER",
+        "THE GUILDIES","SPOOF","CLEO","SCUFFLING","CHAT",
+        "BEE","DREAMER COSMATE","GOLDEN BLIN","LIMON","CHERUB BRADLEY",
+        "HEAVENITE","MONOWAY TO HEAVEN","ASTRO","GOONIE","FOXCALIBUR",
+        "DRAGON PALS","BUN","POKATTOS & L","GARY","LAMPCHAMPS",
+    ]
+    dc_89 = [
+        "AQUWA","BIKINI IKUMI","MOMOTE","SUTO","WET FEFE",
+        "ALLUUX","HEAVENLY","KAIRYU CROCODILE","ROSEDOODLE","SYKKUNO",
+        "FREAM","FROGGYLOCH","K9KURO","SMUGALANA","SPITE",
+        "GX AURA","ARIELLE","BAO THE WHALE","IDOL YENKO","RAIJIN YOCCI",
+        "ZENTREYA","DIAMOND HEIST ELLY","GEEGA","GRIMMI","SPACE INVADER JUNIPER",
+        "TOB","CAMILA","CHAOS QUEEN TRICKYWI","CLUMSY TOTLESS","COTTONTAILVA",
+        "CRIMSON BLOOM","DOKIBIRD","EVIL BUFFPUP","GIWI","MICHI MOCHIEVEE",
+        "NIHMUNE","NYANNERS","RAINHOE","SAIREN","SARUEI",
+        "SHOTO","SHYLILY","VEXORIA THE SUN EATER","AMALEE","CHIBIDOKI",
+        "CYFY","DREAMER VIENNA","GOLDEN HOUR DYARIKKU","LAIMU","LORD AETHELSTAN",
+        "LUCIEL","MAIDEN IN HEAVEN","MILKY","NYANNIE","REINE OF THE SACRED LIGHT",
+        "SAKURA DRAGON SILVERVALE","SHIABUN","SQUCHAN","VEI","YUZU",
+    ]
+    return {
+        "Awakened Worlds": dict(zip(aw_mascots, aw_89)),
+        "Rising Stars":    dict(zip(rs_mascots, rs_89)),
+        "Divine Chaos":    dict(zip(dc_mascots, dc_89)),
+    }
+
+VTUBER_MAP = _build_vtuber_map()
+
+def get_vtuber_for_pull(card_name: str, rarity: str, set_name: str):
+    """Return the canonical 8/9 VTuber name for a pull, or None if not applicable."""
+    if rarity in ("8", "8 Holo", "9", "9 Holo"):
+        return card_name
+    if rarity in ("Mascot", "Mascot Holo"):
+        return VTUBER_MAP.get(set_name, {}).get(card_name)
+    return None
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  SEARCH
@@ -686,6 +806,250 @@ def card_row(parent, index, card_name, rarity, extra=None):
     ctk.CTkLabel(row, text=rarity, text_color=color,
                  font=ctk.CTkFont(size=11)).pack(side="right", padx=10)
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  LOCKOUT  —  DATABASE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def init_lockout_tables(con):
+    con.executescript("""
+        CREATE TABLE IF NOT EXISTS lockout_sessions (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            set_name   TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            ended_at   TEXT
+        );
+        CREATE TABLE IF NOT EXISTS lockout_players (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL,
+            name       TEXT NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES lockout_sessions(id)
+        );
+        CREATE TABLE IF NOT EXISTS lockout_pulls (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL,
+            player_id  INTEGER NOT NULL,
+            card_name  TEXT NOT NULL,
+            rarity     TEXT NOT NULL,
+            points     INTEGER NOT NULL DEFAULT 0,
+            rule       TEXT,
+            pulled_at  TEXT NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES lockout_sessions(id),
+            FOREIGN KEY (player_id)  REFERENCES lockout_players(id)
+        );
+        CREATE TABLE IF NOT EXISTS lockout_locked_vtubers (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id  INTEGER NOT NULL,
+            vtuber_name TEXT NOT NULL,
+            player_id   INTEGER NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES lockout_sessions(id)
+        );
+    """)
+    con.commit()
+
+def db_new_lockout_session(set_name):
+    con = _con(); init_lockout_tables(con)
+    cur = con.execute("INSERT INTO lockout_sessions (set_name,started_at) VALUES (?,?)",
+                      (set_name, datetime.now().isoformat()))
+    sid = cur.lastrowid; con.commit(); con.close(); return sid
+
+def db_end_lockout_session(session_id):
+    con = _con()
+    con.execute("UPDATE lockout_sessions SET ended_at=? WHERE id=?",
+                (datetime.now().isoformat(), session_id))
+    con.commit(); con.close()
+
+def db_add_lockout_player(session_id, name):
+    con = _con()
+    cur = con.execute("INSERT INTO lockout_players (session_id,name) VALUES (?,?)",
+                      (session_id, name))
+    pid = cur.lastrowid; con.commit(); con.close(); return pid
+
+def db_log_lockout_pull(session_id, player_id, card_name, rarity, points, rule):
+    con = _con()
+    con.execute("INSERT INTO lockout_pulls (session_id,player_id,card_name,rarity,points,rule,pulled_at) VALUES (?,?,?,?,?,?,?)",
+                (session_id, player_id, card_name, rarity, points, rule, datetime.now().isoformat()))
+    con.commit(); con.close()
+
+def db_lock_vtuber(session_id, vtuber_name, player_id):
+    con = _con()
+    con.execute("INSERT INTO lockout_locked_vtubers (session_id,vtuber_name,player_id) VALUES (?,?,?)",
+                (session_id, vtuber_name, player_id))
+    con.commit(); con.close()
+
+def db_is_vtuber_locked(session_id, vtuber_name):
+    con = _con()
+    row = con.execute("SELECT player_id FROM lockout_locked_vtubers WHERE session_id=? AND vtuber_name=?",
+                      (session_id, vtuber_name)).fetchone()
+    con.close(); return row is not None
+
+def db_player_pull_categories(session_id, player_id, vtuber_name, set_name):
+    """Return which categories (mascot, 8, 9) a player has for a given VTuber."""
+    con    = _con()
+    pulls  = con.execute(
+        "SELECT card_name, rarity FROM lockout_pulls WHERE session_id=? AND player_id=?",
+        (session_id, player_id)).fetchall()
+    con.close()
+    mascot_map = VTUBER_MAP.get(set_name, {})
+    has_mascot = has_8 = has_9 = False
+    for cname, rarity in pulls:
+        if rarity in ("Mascot", "Mascot Holo") and mascot_map.get(cname) == vtuber_name:
+            has_mascot = True
+        if rarity in ("8", "8 Holo") and cname == vtuber_name:
+            has_8 = True
+        if rarity in ("9", "9 Holo") and cname == vtuber_name:
+            has_9 = True
+    return has_mascot, has_8, has_9
+
+def db_get_lockout_scores(session_id):
+    """Return {player_id: (name, score)} for a session."""
+    con = _con()
+    players = con.execute("SELECT id,name FROM lockout_players WHERE session_id=?",
+                          (session_id,)).fetchall()
+    result  = {}
+    for pid, name in players:
+        score = con.execute("SELECT COALESCE(SUM(points),0) FROM lockout_pulls WHERE session_id=? AND player_id=?",
+                            (session_id, pid)).fetchone()[0]
+        result[pid] = (name, score)
+    con.close(); return result
+
+def db_get_lockout_feed(session_id, limit=50):
+    con  = _con()
+    rows = con.execute(
+        "SELECT lp.name, lu.card_name, lu.rarity, lu.points, lu.rule, lu.pulled_at "
+        "FROM lockout_pulls lu JOIN lockout_players lp ON lp.id=lu.player_id "
+        "WHERE lu.session_id=? ORDER BY lu.id DESC LIMIT ?",
+        (session_id, limit)).fetchall()
+    con.close(); return rows
+
+def db_get_lockout_sessions(set_filter=None):
+    con  = _con(); init_lockout_tables(con)
+    base = ("SELECT s.id, s.set_name, s.started_at, s.ended_at, "
+            "COUNT(DISTINCT p.id), COALESCE(SUM(pu.points),0) "
+            "FROM lockout_sessions s "
+            "LEFT JOIN lockout_players p  ON p.session_id=s.id "
+            "LEFT JOIN lockout_pulls   pu ON pu.session_id=s.id")
+    if set_filter and set_filter != "All Sets":
+        rows = con.execute(base+" WHERE s.set_name=? GROUP BY s.id ORDER BY s.started_at DESC",
+                           (set_filter,)).fetchall()
+    else:
+        rows = con.execute(base+" GROUP BY s.id ORDER BY s.started_at DESC").fetchall()
+    con.close(); return rows
+
+def db_get_session_detail(session_id):
+    con     = _con()
+    players = con.execute("SELECT id,name FROM lockout_players WHERE session_id=?",
+                          (session_id,)).fetchall()
+    pulls   = con.execute(
+        "SELECT lp.name, lu.card_name, lu.rarity, lu.points, lu.rule "
+        "FROM lockout_pulls lu JOIN lockout_players lp ON lp.id=lu.player_id "
+        "WHERE lu.session_id=? ORDER BY lu.id",
+        (session_id,)).fetchall()
+    locked  = con.execute(
+        "SELECT lv.vtuber_name, lp.name FROM lockout_locked_vtubers lv "
+        "JOIN lockout_players lp ON lp.id=lv.player_id WHERE lv.session_id=?",
+        (session_id,)).fetchall()
+    con.close(); return players, pulls, locked
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  LOCKOUT  —  SCORING ENGINE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def lockout_score_pull(session_id, player_id, card_name, rarity, set_name):
+    """
+    Evaluate a pull against lockout rules.
+    Returns (points, rule_description).
+    Commits locks to DB as a side-effect.
+    """
+    points = 0
+    rules  = []
+
+    # Rule 1 — 10 or Secret Rare
+    if rarity in ("10", "Secret Rare"):
+        points += 1
+        rules.append("10 / Secret Rare  +1")
+
+    # Rule 2 — complete VTuber set (Mascot/Holo + 8/8Holo + 9/9Holo)
+    vtuber = get_vtuber_for_pull(card_name, rarity, set_name)
+    if vtuber and not db_is_vtuber_locked(session_id, vtuber):
+        # Temporarily include this pull when checking categories
+        has_m, has_8, has_9 = db_player_pull_categories(session_id, player_id, vtuber, set_name)
+        # Apply the current card
+        if rarity in ("Mascot", "Mascot Holo"):   has_m = True
+        elif rarity in ("8", "8 Holo"):            has_8 = True
+        elif rarity in ("9", "9 Holo"):            has_9 = True
+
+        if has_m and has_8 and has_9:
+            points += 2
+            rules.append(f"Set complete: {vtuber}  +2")
+            db_lock_vtuber(session_id, vtuber, player_id)
+
+    rule_str = "  |  ".join(rules) if rules else None
+    return points, rule_str
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  LOCKOUT SETUP DIALOG
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class LockoutSetupDialog(ctk.CTkToplevel):
+    """Collect set + player names before starting a lockout session."""
+
+    def __init__(self, parent, default_set):
+        super().__init__(parent)
+        self.title("Setup Lockout Session")
+        self.geometry("420x380")
+        self.resizable(False, False)
+        self.grab_set()
+        self.attributes("-topmost", True)
+        self.result = None
+        self._entries = []
+
+        ctk.CTkLabel(self, text="Lockout Session Setup",
+                     font=ctk.CTkFont(size=15, weight="bold")).pack(pady=(18,4))
+
+        row = ctk.CTkFrame(self, fg_color="transparent")
+        row.pack(fill="x", padx=20, pady=(0,10))
+        ctk.CTkLabel(row, text="Set:", width=60).pack(side="left")
+        self._set_var = ctk.StringVar(value=default_set)
+        ctk.CTkOptionMenu(row, values=SETS, variable=self._set_var, width=200).pack(side="left")
+
+        row2 = ctk.CTkFrame(self, fg_color="transparent")
+        row2.pack(fill="x", padx=20, pady=(0,8))
+        ctk.CTkLabel(row2, text="Players:", width=60).pack(side="left")
+        self._count_var = ctk.StringVar(value="2")
+        ctk.CTkOptionMenu(row2, values=["2","3","4","5","6"],
+                          variable=self._count_var,
+                          command=self._rebuild_entries,
+                          width=80).pack(side="left")
+
+        ctk.CTkLabel(self, text="Player names:",
+                     font=ctk.CTkFont(size=12), text_color="#ccc").pack(anchor="w", padx=20)
+        self._entry_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self._entry_frame.pack(fill="x", padx=20, pady=(4,12))
+        self._rebuild_entries("2")
+
+        ctk.CTkButton(self, text="Start Session ⚔️", height=38,
+                      command=self._confirm).pack(padx=20, fill="x")
+        ctk.CTkButton(self, text="Cancel", fg_color="#444", hover_color="#666",
+                      height=30, command=self.destroy).pack(padx=20, pady=(6,0), fill="x")
+
+    def _rebuild_entries(self, count):
+        for w in self._entry_frame.winfo_children(): w.destroy()
+        self._entries = []
+        n = int(count)
+        for i in range(n):
+            e = ctk.CTkEntry(self._entry_frame, placeholder_text=f"Player {i+1}", height=32)
+            e.pack(fill="x", pady=2)
+            self._entries.append(e)
+
+    def _confirm(self):
+        names = [e.get().strip() or f"Player {i+1}"
+                 for i, e in enumerate(self._entries)]
+        self.result = (self._set_var.get(), names)
+        self.destroy()
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  MAIN APP
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -699,6 +1063,11 @@ class VCardTracker(ctk.CTk):
         self.geometry(f"{APP_W}x{APP_H}")
         self.minsize(900, 600)
         self._build_ui()
+        self.title(APP_TITLE)
+        self.geometry(f"{APP_W}x{APP_H}")
+        icon_p = resource_path("VCard.ico")
+        if os.path.exists(icon_p):
+            self.iconbitmap(icon_p)
 
     def _build_ui(self):
         self.tabs = ctk.CTkTabview(self, anchor="nw")
@@ -707,10 +1076,12 @@ class VCardTracker(ctk.CTk):
         self.t_stats = self.tabs.add("📊  Stats")
         self.t_coll  = self.tabs.add("📋  Collection")
         self.t_hist  = self.tabs.add("🕓  History")
+        self.t_lock  = self.tabs.add("⚔️  Lockout")
         self._build_log_tab()
         self._build_stats_tab()
         self._build_collection_tab()
         self._build_history_tab()
+        self._build_lockout_tab()
 
     # ══════════════════════════════════════════════════════════════════════════
     #  TAB 1  —  LOG
@@ -1266,6 +1637,258 @@ class VCardTracker(ctk.CTk):
             ctk.CTkLabel(self._hist_card_list, text="Box deleted.",
                          text_color="#555").pack(pady=30)
             self._refresh_history()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  LOCKOUT  —  UI METHODS  (mixed into VCardTracker)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+    def _build_lockout_tab(self):
+        # Session state
+        self._lk_session_id  = None
+        self._lk_set_name    = SETS[0]
+        self._lk_players     = {}   # {player_id: name}
+        self._lk_active_pid  = None
+
+        # ── Top bar ──────────────────────────────────────────────────────────
+        top = ctk.CTkFrame(self.t_lock, fg_color="transparent")
+        top.pack(fill="x", padx=10, pady=(10,0))
+
+        ctk.CTkLabel(top, text="Set:").pack(side="left", padx=(0,4))
+        self._lk_set_var = ctk.StringVar(value=SETS[0])
+        self._lk_set_menu = ctk.CTkOptionMenu(
+            top, values=SETS, variable=self._lk_set_var,
+            command=lambda _: None, width=165)
+        self._lk_set_menu.pack(side="left")
+
+        self._lk_start_btn = ctk.CTkButton(
+            top, text="⚔️  Start Session", width=140, height=32,
+            fg_color="#2a5a2a", hover_color="#3a7a3a",
+            command=self._lk_start_session)
+        self._lk_start_btn.pack(side="left", padx=(12,0))
+
+        self._lk_end_btn = ctk.CTkButton(
+            top, text="🏁  End Session", width=130, height=32,
+            fg_color="#5a2a00", hover_color="#7a3a00",
+            state="disabled", command=self._lk_end_session)
+        self._lk_end_btn.pack(side="left", padx=(6,0))
+
+        self._lk_status = ctk.CTkLabel(top, text="No session active",
+                                        text_color="#555", font=ctk.CTkFont(size=11))
+        self._lk_status.pack(side="right")
+
+        # ── Body ─────────────────────────────────────────────────────────────
+        body = ctk.CTkFrame(self.t_lock, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=10, pady=8)
+
+        # Left: scoreboard
+        self._lk_score_frame = ctk.CTkFrame(body, width=220)
+        self._lk_score_frame.pack(side="left", fill="y", padx=(0,8))
+        self._lk_score_frame.pack_propagate(False)
+        ctk.CTkLabel(self._lk_score_frame, text="Scoreboard",
+                     font=ctk.CTkFont(size=13, weight="bold"),
+                     text_color="#ccc").pack(pady=(12,6))
+        self._lk_score_list = ctk.CTkScrollableFrame(self._lk_score_frame)
+        self._lk_score_list.pack(fill="both", expand=True, padx=6, pady=(0,6))
+        ctk.CTkLabel(self._lk_score_frame, text="Locked VTubers",
+                     font=ctk.CTkFont(size=11, weight="bold"),
+                     text_color="#888").pack(pady=(4,2))
+        self._lk_locked_list = ctk.CTkScrollableFrame(self._lk_score_frame, height=140)
+        self._lk_locked_list.pack(fill="x", padx=6, pady=(0,8))
+
+        # Center: pull logger
+        center = ctk.CTkFrame(body, width=300)
+        center.pack(side="left", fill="y", padx=(0,8))
+        center.pack_propagate(False)
+
+        ctk.CTkLabel(center, text="Log a Pull",
+                     font=ctk.CTkFont(size=13, weight="bold"),
+                     text_color="#ccc").pack(pady=(12,6))
+
+        ctk.CTkLabel(center, text="Player:", anchor="w").pack(fill="x", padx=12)
+        self._lk_player_var = ctk.StringVar(value="—")
+        self._lk_player_menu = ctk.CTkOptionMenu(
+            center, values=["—"], variable=self._lk_player_var,
+            command=self._lk_on_player_change, width=274, state="disabled")
+        self._lk_player_menu.pack(padx=12, pady=(2,10))
+
+        ctk.CTkLabel(center, text="Card:", anchor="w").pack(fill="x", padx=12)
+        self._lk_ac = AutocompleteEntry(
+            center,
+            get_cards_fn=lambda: [(n, r) for n, r in CARD_DB.get(self._lk_set_var.get(), [])
+                                   if r not in ("Box Topper", "God Rare")],
+            on_select_fn=self._lk_add_pull,
+            placeholder="e.g.  totless 8 h",
+        )
+        self._lk_ac.pack(padx=12, fill="x", pady=(2,0))
+
+        # Right: event feed
+        right = ctk.CTkFrame(body)
+        right.pack(side="right", fill="both", expand=True)
+        ctk.CTkLabel(right, text="Pull Feed",
+                     font=ctk.CTkFont(size=13, weight="bold"),
+                     text_color="#ccc").pack(pady=(12,6))
+        self._lk_feed = ctk.CTkScrollableFrame(right)
+        self._lk_feed.pack(fill="both", expand=True, padx=6, pady=(0,8))
+        ctk.CTkLabel(self._lk_feed, text="Start a session to begin.",
+                     text_color="#555").pack(pady=30)
+
+    # ── Lockout session helpers ───────────────────────────────────────────────
+
+    def _lk_start_session(self):
+        # Ask for player names
+        dlg = LockoutSetupDialog(self, self._lk_set_var.get())
+        self.wait_window(dlg)
+        if dlg.result is None:
+            return
+        set_name, player_names = dlg.result
+        self._lk_set_name   = set_name
+        self._lk_session_id = db_new_lockout_session(set_name)
+        self._lk_players    = {}
+        for name in player_names:
+            pid = db_add_lockout_player(self._lk_session_id, name)
+            self._lk_players[pid] = name
+
+        first_pid = list(self._lk_players.keys())[0]
+        self._lk_active_pid = first_pid
+        names = list(self._lk_players.values())
+        self._lk_player_var.set(names[0])
+        self._lk_player_menu.configure(values=names, state="normal")
+        self._lk_set_menu.configure(state="disabled")
+        self._lk_start_btn.configure(state="disabled")
+        self._lk_end_btn.configure(state="normal")
+        self._lk_status.configure(
+            text=f"Session active  ·  {set_name}  ·  {len(names)} players",
+            text_color="white")
+        self._lk_refresh_scoreboard()
+        self._lk_refresh_feed()
+        self._lk_ac.focus()
+
+    def _lk_end_session(self):
+        if self._lk_session_id is None: return
+        scores = db_get_lockout_scores(self._lk_session_id)
+        winner_pid = max(scores, key=lambda p: scores[p][1])
+        winner_name, winner_score = scores[winner_pid]
+        db_end_lockout_session(self._lk_session_id)
+
+        lines = "\n".join(f"  {n}:  {s} pts" for pid,(n,s) in
+                           sorted(scores.items(), key=lambda x: -x[1][1]))
+        messagebox.showinfo("Session Over!",
+                            f"\U0001f3c6  Winner: {winner_name}  ({winner_score} pts)\n\n{lines}")
+        self._lk_session_id = None
+        self._lk_players    = {}
+        self._lk_active_pid = None
+        self._lk_player_var.set("—")
+        self._lk_player_menu.configure(values=["—"], state="disabled")
+        self._lk_set_menu.configure(state="normal")
+        self._lk_start_btn.configure(state="normal")
+        self._lk_end_btn.configure(state="disabled")
+        self._lk_status.configure(text="No session active", text_color="#555")
+        self._lk_refresh_scoreboard()
+        self._lk_refresh_feed()
+
+    def _lk_on_player_change(self, name):
+        for pid, pname in self._lk_players.items():
+            if pname == name:
+                self._lk_active_pid = pid
+                break
+        self._lk_ac.focus()
+
+    def _lk_add_pull(self, card_name, rarity):
+        if self._lk_session_id is None or self._lk_active_pid is None:
+            return
+        points, rule = lockout_score_pull(
+            self._lk_session_id, self._lk_active_pid,
+            card_name, rarity, self._lk_set_name)
+        db_log_lockout_pull(
+            self._lk_session_id, self._lk_active_pid,
+            card_name, rarity, points, rule)
+        self._lk_refresh_scoreboard()
+        self._lk_refresh_feed()
+        self._lk_ac.focus()
+
+    def _lk_refresh_scoreboard(self):
+        for w in self._lk_score_list.winfo_children():    w.destroy()
+        for w in self._lk_locked_list.winfo_children():   w.destroy()
+        if not self._lk_session_id:
+            ctk.CTkLabel(self._lk_score_list, text="—", text_color="#555").pack(pady=10)
+            return
+
+        scores = db_get_lockout_scores(self._lk_session_id)
+        sorted_scores = sorted(scores.items(), key=lambda x: -x[1][1])
+        colors = ["#ffd54f","#d4d4d4","#ff7043","#42a5f5","#66bb6a","#ab47bc","#ff80ab"]
+        for rank, (pid, (name, score)) in enumerate(sorted_scores):
+            color = colors[rank % len(colors)]
+            row   = ctk.CTkFrame(self._lk_score_list, fg_color="#252525", corner_radius=6)
+            row.pack(fill="x", padx=4, pady=3)
+            ctk.CTkLabel(row, text=f"#{rank+1}", width=28, text_color="#555",
+                         font=ctk.CTkFont(size=11)).pack(side="left", padx=(6,2), pady=7)
+            ctk.CTkLabel(row, text=name, anchor="w", text_color=color,
+                         font=ctk.CTkFont(size=12, weight="bold")).pack(side="left", fill="x", expand=True)
+            ctk.CTkLabel(row, text=f"{score} pts", text_color=color,
+                         font=ctk.CTkFont(size=12, weight="bold")).pack(side="right", padx=8)
+
+        # Locked VTubers
+        con = _con()
+        locked = con.execute(
+            "SELECT lv.vtuber_name, lp.name FROM lockout_locked_vtubers lv "
+            "JOIN lockout_players lp ON lp.id=lv.player_id WHERE lv.session_id=?",
+            (self._lk_session_id,)).fetchall()
+        con.close()
+        if not locked:
+            ctk.CTkLabel(self._lk_locked_list, text="None yet", text_color="#555",
+                         font=ctk.CTkFont(size=10)).pack(pady=4)
+        for vname, pname in locked:
+            row = ctk.CTkFrame(self._lk_locked_list, fg_color="#1a1a1a", corner_radius=4)
+            row.pack(fill="x", padx=2, pady=1)
+            ctk.CTkLabel(row, text="🔒", font=ctk.CTkFont(size=10)).pack(side="left", padx=(4,2))
+            ctk.CTkLabel(row, text=vname, anchor="w", text_color="#aaa",
+                         font=ctk.CTkFont(size=10)).pack(side="left", fill="x", expand=True)
+            ctk.CTkLabel(row, text=pname, text_color="#666",
+                         font=ctk.CTkFont(size=10)).pack(side="right", padx=4)
+
+    def _lk_refresh_feed(self):
+        for w in self._lk_feed.winfo_children(): w.destroy()
+        if not self._lk_session_id:
+            ctk.CTkLabel(self._lk_feed, text="Start a session to begin.",
+                         text_color="#555").pack(pady=30)
+            return
+        rows = db_get_lockout_feed(self._lk_session_id)
+        if not rows:
+            ctk.CTkLabel(self._lk_feed, text="No pulls yet.",
+                         text_color="#555").pack(pady=30)
+            return
+        for pname, cname, rarity, points, rule, pulled_at in rows:
+            try:    ts = datetime.fromisoformat(pulled_at).strftime("%H:%M:%S")
+            except: ts = "—"
+            color  = RARITY_COLORS.get(rarity, "#888")
+            pt_clr = "#ffd54f" if points > 0 else "#555"
+            row    = ctk.CTkFrame(self._lk_feed, fg_color="#1e1e1e", corner_radius=5)
+            row.pack(fill="x", padx=4, pady=2)
+            # timestamp
+            ctk.CTkLabel(row, text=ts, width=58, text_color="#555",
+                         font=ctk.CTkFont(size=10)).pack(side="left", padx=(6,0), pady=5)
+            # player
+            ctk.CTkLabel(row, text=pname, width=90, anchor="w", text_color="#ccc",
+                         font=ctk.CTkFont(size=11, weight="bold")).pack(side="left", padx=(4,0))
+            # dot + card
+            ctk.CTkLabel(row, text="●", text_color=color,
+                         font=ctk.CTkFont(size=12)).pack(side="left", padx=(4,2))
+            inner = ctk.CTkFrame(row, fg_color="transparent")
+            inner.pack(side="left", fill="x", expand=True, padx=(0,4))
+            ctk.CTkLabel(inner, text=cname, anchor="w",
+                         font=ctk.CTkFont(size=11, weight="bold")).pack(anchor="w")
+            if rule:
+                ctk.CTkLabel(inner, text=rule, anchor="w", text_color="#e040fb",
+                             font=ctk.CTkFont(size=10)).pack(anchor="w")
+            # points
+            pt_txt = f"+{points}" if points > 0 else "—"
+            ctk.CTkLabel(row, text=pt_txt, width=36, text_color=pt_clr,
+                         font=ctk.CTkFont(size=12, weight="bold")).pack(side="right", padx=8)
+            # rarity
+            ctk.CTkLabel(row, text=rarity, text_color=color,
+                         font=ctk.CTkFont(size=10)).pack(side="right", padx=(0,4))
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  ENTRY POINT
