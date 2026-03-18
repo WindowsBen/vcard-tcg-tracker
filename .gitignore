@@ -1,0 +1,5 @@
+vcard_tracker.db
+dist/
+build/
+*.spec
+__pycache__/
