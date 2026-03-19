@@ -293,7 +293,7 @@ def _build_dc():
         cards.append((name, "10"))
     dc_mascots = [
         "ATLAS","ABYSSAL GUUMI","WOODCHAT","TONIE","RANCID & GLITCHY",
-        "TOANY","CHILLBOT","LITTLE CORC","BEEPU","SYKKCAT",
+        "TOANY","CHILLBOT","LITTLE CROC","BEEPU","SYKKCAT",
         "SPIKE","FROGLODYTES","WHISPER","SMUGGLER","RAWR XD",
         "RAMBIT","GLOWSTICKS","BAOBBLE BUDDY","BUNNERD","ONIFAN",
         "GECKOS","BANDIT & ACE","BORIS","GASPAR & SKELTER","UNIDENTIFIED FLYING MOTH",
@@ -411,7 +411,7 @@ def _build_vtuber_map():
     ]
     dc_mascots = [
         "ATLAS","ABYSSAL GUUMI","WOODCHAT","TONIE","RANCID & GLITCHY",
-        "TOANY","CHILLBOT","LITTLE CORC","BEEPU","SYKKCAT",
+        "TOANY","CHILLBOT","LITTLE CROC","BEEPU","SYKKCAT",
         "SPIKE","FROGLODYTES","WHISPER","SMUGGLER","RAWR XD",
         "RAMBIT","GLOWSTICKS","BAOBBLE BUDDY","BUNNERD","ONIFAN",
         "GECKOS","BANDIT & ACE","BORIS","GASPAR & SKELTER","UNIDENTIFIED FLYING MOTH",
@@ -867,9 +867,9 @@ def db_add_lockout_player(session_id, name):
 
 def db_log_lockout_pull(session_id, player_id, card_name, rarity, points, rule):
     con = _con()
-    con.execute("INSERT INTO lockout_pulls (session_id,player_id,card_name,rarity,points,rule,pulled_at) VALUES (?,?,?,?,?,?,?)",
-                (session_id, player_id, card_name, rarity, points, rule, datetime.now().isoformat()))
-    con.commit(); con.close()
+    cur = con.execute("INSERT INTO lockout_pulls (session_id,player_id,card_name,rarity,points,rule,pulled_at) VALUES (?,?,?,?,?,?,?)",
+                      (session_id, player_id, card_name, rarity, points, rule, datetime.now().isoformat()))
+    pid = cur.lastrowid; con.commit(); con.close(); return pid
 
 def db_lock_vtuber(session_id, vtuber_name, player_id):
     con = _con()
@@ -913,14 +913,138 @@ def db_get_lockout_scores(session_id):
         result[pid] = (name, score)
     con.close(); return result
 
-def db_get_lockout_feed(session_id, limit=50):
+def db_get_lockout_feed(session_id, limit=500):
     con  = _con()
     rows = con.execute(
-        "SELECT lp.name, lu.card_name, lu.rarity, lu.points, lu.rule, lu.pulled_at "
+        "SELECT lu.id, lp.name, lp.id, lu.card_name, lu.rarity, lu.points, lu.rule, lu.pulled_at "
         "FROM lockout_pulls lu JOIN lockout_players lp ON lp.id=lu.player_id "
-        "WHERE lu.session_id=? ORDER BY lu.id DESC LIMIT ?",
+        "WHERE lu.session_id=? ORDER BY lu.id ASC LIMIT ?",
         (session_id, limit)).fetchall()
     con.close(); return rows
+
+def db_delete_lockout_pull(pull_id, session_id, player_id, card_name, rarity, set_name):
+    """
+    Delete a lockout pull and roll back / re-award scoring side-effects:
+    - 10/Secret Rare/World Holo: remove lock, then check if another player
+      already holds the same card — if so, award them the point and re-lock.
+    - VTuber set: if set is now incomplete, remove lock + zero the +2.
+      Then check every other player to see if THEY now have a complete set
+      and award them the +2 and the lock.
+    """
+    con = _con()
+    con.execute("DELETE FROM lockout_pulls WHERE id=?", (pull_id,))
+    con.commit()
+
+    mascot_map = VTUBER_MAP.get(set_name, {})
+
+    # ── Rule 1 rollback + re-award ─────────────────────────────────────────
+    if rarity in ("10", "Secret Rare", "World Holo"):
+        lock_id = card_name + " (" + rarity + ")"
+        # Remove the lock held by the deleted pull's player
+        con.execute(
+            "DELETE FROM lockout_locked_vtubers "
+            "WHERE session_id=? AND vtuber_name=? AND player_id=?",
+            (session_id, lock_id, player_id))
+        con.commit()
+
+        # Find the earliest remaining pull of this exact card+rarity by any other player
+        other = con.execute(
+            "SELECT id, player_id FROM lockout_pulls "
+            "WHERE session_id=? AND card_name=? AND rarity=? AND player_id!=? "
+            "ORDER BY id ASC LIMIT 1",
+            (session_id, card_name, rarity, player_id)).fetchone()
+        if other:
+            other_pull_id, other_pid = other
+            # Award them +1 and re-lock
+            con.execute(
+                "UPDATE lockout_pulls SET points=points+1, "
+                "rule='10 / Secret Rare  +1' WHERE id=?",
+                (other_pull_id,))
+            con.execute(
+                "INSERT INTO lockout_locked_vtubers (session_id, vtuber_name, player_id) "
+                "VALUES (?,?,?)", (session_id, lock_id, other_pid))
+            con.commit()
+
+    # ── Rule 2 rollback + re-award ─────────────────────────────────────────
+    if rarity in ("8","8 Holo","9","9 Holo"):
+        vtuber = card_name
+    elif rarity in ("Mascot","Mascot Holo"):
+        vtuber = mascot_map.get(card_name)
+    else:
+        vtuber = None
+
+    if vtuber:
+        # Is this vtuber locked by the deleted player?
+        locked_row = con.execute(
+            "SELECT id FROM lockout_locked_vtubers "
+            "WHERE session_id=? AND vtuber_name=? AND player_id=?",
+            (session_id, vtuber, player_id)).fetchone()
+        if locked_row:
+            # Re-check if set is still complete for the deleted player
+            remaining = con.execute(
+                "SELECT card_name, rarity FROM lockout_pulls "
+                "WHERE session_id=? AND player_id=?",
+                (session_id, player_id)).fetchall()
+            has_m = any(r in ("Mascot","Mascot Holo") and mascot_map.get(n) == vtuber
+                        for n, r in remaining)
+            has_8 = any(r in ("8","8 Holo") and n == vtuber for n, r in remaining)
+            has_9 = any(r in ("9","9 Holo") and n == vtuber for n, r in remaining)
+            if not (has_m and has_8 and has_9):
+                # Remove the lock and zero out the +2
+                con.execute(
+                    "DELETE FROM lockout_locked_vtubers "
+                    "WHERE session_id=? AND vtuber_name=? AND player_id=?",
+                    (session_id, vtuber, player_id))
+                con.execute(
+                    "UPDATE lockout_pulls SET points=points-2, rule=NULL "
+                    "WHERE session_id=? AND player_id=? AND rule LIKE ? AND points>=2",
+                    (session_id, player_id, "%" + "Set complete: " + vtuber + "%"))
+                con.commit()
+
+                # Now check every other player — do they have a complete set?
+                all_players = con.execute(
+                    "SELECT DISTINCT player_id FROM lockout_pulls "
+                    "WHERE session_id=? AND player_id!=?",
+                    (session_id, player_id)).fetchall()
+                for (other_pid,) in all_players:
+                    # Skip if they already hold this lock
+                    already = con.execute(
+                        "SELECT id FROM lockout_locked_vtubers "
+                        "WHERE session_id=? AND vtuber_name=?",
+                        (session_id, vtuber)).fetchone()
+                    if already:
+                        break  # already claimed by someone
+
+                    other_pulls = con.execute(
+                        "SELECT card_name, rarity FROM lockout_pulls "
+                        "WHERE session_id=? AND player_id=?",
+                        (session_id, other_pid)).fetchall()
+                    o_m = any(r in ("Mascot","Mascot Holo") and mascot_map.get(n) == vtuber
+                              for n, r in other_pulls)
+                    o_8 = any(r in ("8","8 Holo") and n == vtuber for n, r in other_pulls)
+                    o_9 = any(r in ("9","9 Holo") and n == vtuber for n, r in other_pulls)
+                    if o_m and o_8 and o_9:
+                        # Find the latest pull in their set and award the +2 there
+                        latest = con.execute(
+                            "SELECT id FROM lockout_pulls "
+                            "WHERE session_id=? AND player_id=? "
+                            "AND (card_name=? OR (rarity IN ('Mascot','Mascot Holo') AND card_name IN ("
+                            "  SELECT card_name FROM lockout_pulls WHERE session_id=? AND player_id=?"
+                            "))) ORDER BY id DESC LIMIT 1",
+                            (session_id, other_pid, vtuber, session_id, other_pid)).fetchone()
+                        if latest:
+                            rule_txt = "Set complete: " + vtuber + "  +2"
+                            con.execute(
+                                "UPDATE lockout_pulls SET points=points+2, rule=? WHERE id=?",
+                                (rule_txt, latest[0]))
+                        con.execute(
+                            "INSERT INTO lockout_locked_vtubers "
+                            "(session_id, vtuber_name, player_id) VALUES (?,?,?)",
+                            (session_id, vtuber, other_pid))
+                        con.commit()
+                        break  # only first eligible player gets it
+
+    con.close()
 
 def db_get_lockout_sessions(set_filter=None):
     con  = _con(); init_lockout_tables(con)
@@ -966,9 +1090,14 @@ def lockout_score_pull(session_id, player_id, card_name, rarity, set_name):
     rules  = []
 
     # Rule 1 — 10 or Secret Rare
-    if rarity in ("10", "Secret Rare"):
-        points += 1
-        rules.append("10 / Secret Rare  +1")
+    if rarity in ("10", "Secret Rare", "World Holo"):
+        lock_id = f"{card_name} ({rarity})"
+        if not db_is_vtuber_locked(session_id, lock_id):
+            points += 1
+            rules.append(f"UNIQUE: {lock_id}  +1")
+            db_lock_vtuber(session_id, lock_id, player_id)
+        else:
+            rules.append(f"{lock_id} already Locked")
 
     # Rule 2 — complete VTuber set (Mascot/Holo + 8/8Holo + 9/9Holo)
     vtuber = get_vtuber_for_pull(card_name, rarity, set_name)
@@ -1068,6 +1197,16 @@ class VCardTracker(ctk.CTk):
         icon_p = resource_path("VCard.ico")
         if os.path.exists(icon_p):
             self.iconbitmap(icon_p)
+        # Debounce resize — only process after user stops dragging for 120ms
+        self._resize_job = None
+        self.bind("<Configure>", self._on_resize)
+
+    def _on_resize(self, event):
+        if event.widget is not self:
+            return
+        if self._resize_job:
+            self.after_cancel(self._resize_job)
+        self._resize_job = self.after(120, lambda: None)
 
     def _build_ui(self):
         self.tabs = ctk.CTkTabview(self, anchor="nw")
@@ -1220,7 +1359,7 @@ class VCardTracker(ctk.CTk):
             return
         db_add_pull(self._pack_id, name, rarity, self._set_name)
         self._pack_cards.append((name, rarity))
-        self._refresh_preview()
+        self._append_preview_row(len(self._pack_cards) - 1, name, rarity)
         self._sync_log_ui()
         if len(self._pack_cards) >= CARDS_PER_PACK:
             self._finish_pack()
@@ -1319,6 +1458,14 @@ class VCardTracker(ctk.CTk):
             return
         for i, (n, r) in enumerate(self._pack_cards):
             self._preview_row(i, n, r)
+
+    def _append_preview_row(self, index, card_name, rarity):
+        """Append a single card row to the preview — no full rebuild."""
+        # Remove placeholder label if it's the only child
+        children = self._preview.winfo_children()
+        if len(children) == 1 and isinstance(children[0], ctk.CTkLabel):
+            children[0].destroy()
+        self._preview_row(index, card_name, rarity)
 
     def _preview_row(self, index, card_name, rarity):
         color = RARITY_COLORS.get(rarity, "#888")
@@ -1481,14 +1628,21 @@ class VCardTracker(ctk.CTk):
         ctk.CTkButton(top, text="↺  Refresh", command=self._refresh_history,
                       width=95).pack(side="right")
 
-        pane = ctk.CTkFrame(self.t_hist, fg_color="transparent")
-        pane.pack(fill="both", expand=True, padx=10, pady=(4,8))
+        # Sub-tabs
+        self._hist_subtabs = ctk.CTkTabview(self.t_hist, anchor="nw")
+        self._hist_subtabs.pack(fill="both", expand=True, padx=6, pady=(0,6))
+        ht_boxes   = self._hist_subtabs.add("📦  Boxes & Packs")
+        ht_lockout = self._hist_subtabs.add("⚔️  Lockout")
 
-        # ── Column 1: boxes ──────────────────────────────────────────────────
+        # ── Boxes & Packs subtab ─────────────────────────────────────────────
+        pane = ctk.CTkFrame(ht_boxes, fg_color="transparent")
+        pane.pack(fill="both", expand=True, padx=4, pady=4)
+
+        # Column 1: boxes
         self._hist_box_list = ctk.CTkScrollableFrame(pane, width=240)
         self._hist_box_list.pack(side="left", fill="y", padx=(0,6))
 
-        # ── Column 2: packs in selected box ──────────────────────────────────
+        # Column 2: packs in selected box
         col2 = ctk.CTkFrame(pane, width=220)
         col2.pack(side="left", fill="y", padx=(0,6))
         col2.pack_propagate(False)
@@ -1498,7 +1652,7 @@ class VCardTracker(ctk.CTk):
         self._hist_pack_list = ctk.CTkScrollableFrame(col2)
         self._hist_pack_list.pack(fill="both", expand=True, padx=4, pady=(0,4))
 
-        # ── Column 3: cards in selected pack ─────────────────────────────────
+        # Column 3: cards in selected pack
         col3 = ctk.CTkFrame(pane)
         col3.pack(side="left", fill="both", expand=True)
         hdr3 = ctk.CTkFrame(col3, fg_color="transparent")
@@ -1511,7 +1665,6 @@ class VCardTracker(ctk.CTk):
             fg_color="#4a1a1a", hover_color="#6a2a2a", state="disabled",
             command=self._delete_selected_box)
         self._hist_del_box_btn.pack(side="right")
-
         self._hist_card_list = ctk.CTkScrollableFrame(col3)
         self._hist_card_list.pack(fill="both", expand=True, padx=4, pady=(0,4))
         ctk.CTkLabel(self._hist_card_list,
@@ -1523,6 +1676,34 @@ class VCardTracker(ctk.CTk):
         self._hist_box_btns  = {}
         self._hist_pack_btns = {}
         self._refresh_history()
+
+        # ── Lockout subtab ───────────────────────────────────────────────────
+        lk_pane = ctk.CTkFrame(ht_lockout, fg_color="transparent")
+        lk_pane.pack(fill="both", expand=True, padx=4, pady=4)
+
+        self._lk_hist_sess_list = ctk.CTkScrollableFrame(lk_pane, width=260)
+        self._lk_hist_sess_list.pack(side="left", fill="y", padx=(0,6))
+
+        lk_col2 = ctk.CTkFrame(lk_pane)
+        lk_col2.pack(side="left", fill="both", expand=True)
+        lk_hdr = ctk.CTkFrame(lk_col2, fg_color="transparent")
+        lk_hdr.pack(fill="x", padx=8, pady=(8,4))
+        ctk.CTkLabel(lk_hdr, text="Session Details",
+                     font=ctk.CTkFont(size=12, weight="bold"),
+                     text_color="#ccc").pack(side="left")
+        self._lk_hist_del_btn = ctk.CTkButton(
+            lk_hdr, text="🗑 Delete Session", width=130, height=26,
+            fg_color="#4a1a1a", hover_color="#6a2a2a", state="disabled",
+            command=self._lk_hist_delete_session)
+        self._lk_hist_del_btn.pack(side="right")
+        self._lk_hist_detail = ctk.CTkScrollableFrame(lk_col2)
+        self._lk_hist_detail.pack(fill="both", expand=True, padx=4, pady=(0,4))
+        ctk.CTkLabel(self._lk_hist_detail, text="Select a session to view details.",
+                     text_color="#555").pack(pady=30)
+
+        self._lk_hist_sel_id  = None
+        self._lk_hist_sess_btns = {}
+        self._refresh_lockout_history()
 
     def _refresh_history(self):
         sf    = self._hist_set_var.get()
@@ -1565,6 +1746,145 @@ class VCardTracker(ctk.CTk):
                     ctk.CTkLabel(sub, text=f" {tn}  [{tr}]",
                                  text_color="#888", font=ctk.CTkFont(size=10),
                                  anchor="w").pack(side="left")
+
+        # Also refresh lockout history if it has been built
+        if hasattr(self, "_lk_hist_sess_list"):
+            self._refresh_lockout_history()
+
+    def _refresh_lockout_history(self):
+        sf       = self._hist_set_var.get()
+        sessions = db_get_lockout_sessions(sf)
+        self._lk_hist_sess_btns = {}
+        for w in self._lk_hist_sess_list.winfo_children(): w.destroy()
+
+        if not sessions:
+            ctk.CTkLabel(self._lk_hist_sess_list, text="No lockout sessions yet.",
+                         text_color="#555").pack(pady=20)
+            return
+
+        ctk.CTkLabel(self._lk_hist_sess_list, text=f"{len(sessions)} session(s)",
+                     text_color="#555", font=ctk.CTkFont(size=11)
+                     ).pack(anchor="w", padx=4, pady=(0,4))
+
+        for sid, sname, started_at, ended_at, player_cnt, total_pts in sessions:
+            try:    ds = datetime.fromisoformat(started_at).strftime("%b %d  %H:%M")
+            except: ds = started_at[:16]
+            status = "Finished" if ended_at else "In Progress"
+            is_sel = (sid == self._lk_hist_sel_id)
+            btn = ctk.CTkButton(
+                self._lk_hist_sess_list,
+                text=sname + "  •  " + str(player_cnt) + " players\n" + ds + "  •  " + status,
+                anchor="w", height=50, font=ctk.CTkFont(size=11),
+                fg_color="#1e3a5f" if is_sel else "#252525",
+                hover_color="#2a4a7f" if is_sel else "#323232",
+                border_width=2 if is_sel else 0,
+                border_color="#4a8adf" if is_sel else "#252525",
+                command=lambda s=sid: self._lk_hist_show_session(s),
+            )
+            btn.pack(fill="x", pady=2, padx=2)
+            self._lk_hist_sess_btns[sid] = btn
+
+    def _lk_hist_show_session(self, session_id):
+        self._lk_hist_sel_id = session_id
+        self._lk_hist_del_btn.configure(state="normal")
+
+        for sid, btn in self._lk_hist_sess_btns.items():
+            sel = (sid == session_id)
+            btn.configure(fg_color="#1e3a5f" if sel else "#252525",
+                          hover_color="#2a4a7f" if sel else "#323232",
+                          border_width=2 if sel else 0,
+                          border_color="#4a8adf" if sel else "#252525")
+
+        for w in self._lk_hist_detail.winfo_children(): w.destroy()
+        players, pulls, locked = db_get_session_detail(session_id)
+
+        if not players:
+            ctk.CTkLabel(self._lk_hist_detail, text="No data.",
+                         text_color="#555").pack(pady=20)
+            return
+
+        # Final Scores — small, render immediately
+        ctk.CTkLabel(self._lk_hist_detail, text="Final Scores",
+                     font=ctk.CTkFont(size=12, weight="bold"),
+                     text_color="#ccc").pack(anchor="w", padx=8, pady=(8,4))
+        scores = db_get_lockout_scores(session_id)
+        rank_colors = ["#ffd54f","#d4d4d4","#ff7043","#42a5f5","#66bb6a","#ab47bc","#ff80ab"]
+        for rank, (pid, (pname, score)) in enumerate(
+                sorted(scores.items(), key=lambda x: -x[1][1])):
+            color = rank_colors[rank % len(rank_colors)]
+            row   = ctk.CTkFrame(self._lk_hist_detail, fg_color="#252525", corner_radius=6)
+            row.pack(fill="x", padx=8, pady=2)
+            ctk.CTkLabel(row, text=f"#{rank+1}", width=28, text_color="#555",
+                         font=ctk.CTkFont(size=11)).pack(side="left", padx=(8,4), pady=6)
+            ctk.CTkLabel(row, text=pname, anchor="w", text_color=color,
+                         font=ctk.CTkFont(size=12, weight="bold")).pack(side="left", fill="x", expand=True)
+            ctk.CTkLabel(row, text=f"{score} pts", text_color=color,
+                         font=ctk.CTkFont(size=12, weight="bold")).pack(side="right", padx=10)
+
+        # Locked VTubers — small, render immediately
+        if locked:
+            ctk.CTkLabel(self._lk_hist_detail, text="Locked VTubers",
+                         font=ctk.CTkFont(size=12, weight="bold"),
+                         text_color="#ccc").pack(anchor="w", padx=8, pady=(12,4))
+            for vname, pname in locked:
+                row = ctk.CTkFrame(self._lk_hist_detail, fg_color="#1a1a1a", corner_radius=5)
+                row.pack(fill="x", padx=8, pady=2)
+                ctk.CTkLabel(row, text="🔒", font=ctk.CTkFont(size=11)).pack(side="left", padx=(8,4), pady=5)
+                ctk.CTkLabel(row, text=vname, anchor="w", text_color="#aaa",
+                             font=ctk.CTkFont(size=12)).pack(side="left", fill="x", expand=True)
+                ctk.CTkLabel(row, text=pname, text_color="#666",
+                             font=ctk.CTkFont(size=11)).pack(side="right", padx=10)
+
+        # Pull Log — batch render 20 rows at a time to keep UI responsive
+        if pulls:
+            ctk.CTkLabel(self._lk_hist_detail, text="Pull Log",
+                         font=ctk.CTkFont(size=12, weight="bold"),
+                         text_color="#ccc").pack(anchor="w", padx=8, pady=(12,4))
+            self._lk_hist_render_pulls(list(pulls), 0)
+
+    def _lk_hist_render_pulls(self, pulls, offset, batch=20):
+        """Render pulls in batches using after() to avoid freezing the UI."""
+        for pname, cname, rarity, points, rule in pulls[offset:offset + batch]:
+            color  = RARITY_COLORS.get(rarity, "#888")
+            pt_clr = "#ffd54f" if points > 0 else "#555"
+            row    = ctk.CTkFrame(self._lk_hist_detail, fg_color="#1e1e1e", corner_radius=5)
+            row.pack(fill="x", padx=8, pady=2)
+            ctk.CTkLabel(row, text=pname, width=100, anchor="w", text_color="#ccc",
+                         font=ctk.CTkFont(size=11, weight="bold")).pack(side="left", padx=(8,0), pady=5)
+            ctk.CTkLabel(row, text="●", text_color=color,
+                         font=ctk.CTkFont(size=12)).pack(side="left", padx=(4,2))
+            inner = ctk.CTkFrame(row, fg_color="transparent")
+            inner.pack(side="left", fill="x", expand=True)
+            ctk.CTkLabel(inner, text=cname, anchor="w",
+                         font=ctk.CTkFont(size=11, weight="bold")).pack(anchor="w")
+            if rule:
+                ctk.CTkLabel(inner, text=rule, anchor="w", text_color="#e040fb",
+                             font=ctk.CTkFont(size=10)).pack(anchor="w")
+            pt_txt = f"+{points}" if points > 0 else "—"
+            ctk.CTkLabel(row, text=pt_txt, width=36, text_color=pt_clr,
+                         font=ctk.CTkFont(size=12, weight="bold")).pack(side="right", padx=8)
+            ctk.CTkLabel(row, text=rarity, text_color=color,
+                         font=ctk.CTkFont(size=10)).pack(side="right", padx=(0,4))
+        # Schedule next batch if there are more rows
+        if offset + batch < len(pulls):
+            self.after(10, lambda: self._lk_hist_render_pulls(pulls, offset + batch, batch))
+
+    def _lk_hist_delete_session(self):
+        if self._lk_hist_sel_id is None: return
+        if messagebox.askyesno("Delete Session",
+                               "Permanently delete this lockout session and all its data?"):
+            con = _con()
+            con.execute("DELETE FROM lockout_pulls          WHERE session_id=?", (self._lk_hist_sel_id,))
+            con.execute("DELETE FROM lockout_locked_vtubers WHERE session_id=?", (self._lk_hist_sel_id,))
+            con.execute("DELETE FROM lockout_players        WHERE session_id=?", (self._lk_hist_sel_id,))
+            con.execute("DELETE FROM lockout_sessions       WHERE id=?",         (self._lk_hist_sel_id,))
+            con.commit(); con.close()
+            self._lk_hist_sel_id = None
+            self._lk_hist_del_btn.configure(state="disabled")
+            for w in self._lk_hist_detail.winfo_children(): w.destroy()
+            ctk.CTkLabel(self._lk_hist_detail, text="Session deleted.",
+                         text_color="#555").pack(pady=30)
+            self._refresh_lockout_history()
 
     def _show_box(self, box_id):
         self._sel_box_id  = box_id
@@ -1682,7 +2002,7 @@ class VCardTracker(ctk.CTk):
         body.pack(fill="both", expand=True, padx=10, pady=8)
 
         # Left: scoreboard
-        self._lk_score_frame = ctk.CTkFrame(body, width=220)
+        self._lk_score_frame = ctk.CTkFrame(body, width=320)
         self._lk_score_frame.pack(side="left", fill="y", padx=(0,8))
         self._lk_score_frame.pack_propagate(False)
         ctk.CTkLabel(self._lk_score_frame, text="Scoreboard",
@@ -1696,7 +2016,7 @@ class VCardTracker(ctk.CTk):
         self._lk_locked_list = ctk.CTkScrollableFrame(self._lk_score_frame, height=140)
         self._lk_locked_list.pack(fill="x", padx=6, pady=(0,8))
 
-        # Center: pull logger
+        # Center: per-player pull fields
         center = ctk.CTkFrame(body, width=300)
         center.pack(side="left", fill="y", padx=(0,8))
         center.pack_propagate(False)
@@ -1705,22 +2025,9 @@ class VCardTracker(ctk.CTk):
                      font=ctk.CTkFont(size=13, weight="bold"),
                      text_color="#ccc").pack(pady=(12,6))
 
-        ctk.CTkLabel(center, text="Player:", anchor="w").pack(fill="x", padx=12)
-        self._lk_player_var = ctk.StringVar(value="—")
-        self._lk_player_menu = ctk.CTkOptionMenu(
-            center, values=["—"], variable=self._lk_player_var,
-            command=self._lk_on_player_change, width=274, state="disabled")
-        self._lk_player_menu.pack(padx=12, pady=(2,10))
-
-        ctk.CTkLabel(center, text="Card:", anchor="w").pack(fill="x", padx=12)
-        self._lk_ac = AutocompleteEntry(
-            center,
-            get_cards_fn=lambda: [(n, r) for n, r in CARD_DB.get(self._lk_set_var.get(), [])
-                                   if r not in ("Box Topper", "God Rare")],
-            on_select_fn=self._lk_add_pull,
-            placeholder="e.g.  totless 8 h",
-        )
-        self._lk_ac.pack(padx=12, fill="x", pady=(2,0))
+        self._lk_fields_scroll = ctk.CTkScrollableFrame(center, fg_color="transparent")
+        self._lk_fields_scroll.pack(fill="both", expand=True, padx=6, pady=(0,6))
+        self._lk_player_acs = []   # [(player_id, AutocompleteEntry), ...]
 
         # Right: event feed
         right = ctk.CTkFrame(body)
@@ -1732,6 +2039,8 @@ class VCardTracker(ctk.CTk):
         self._lk_feed.pack(fill="both", expand=True, padx=6, pady=(0,8))
         ctk.CTkLabel(self._lk_feed, text="Start a session to begin.",
                      text_color="#555").pack(pady=30)
+
+        self._lk_score_labels = {}   # {player_id: (name_lbl, score_lbl)}
 
     # ── Lockout session helpers ───────────────────────────────────────────────
 
@@ -1749,20 +2058,15 @@ class VCardTracker(ctk.CTk):
             pid = db_add_lockout_player(self._lk_session_id, name)
             self._lk_players[pid] = name
 
-        first_pid = list(self._lk_players.keys())[0]
-        self._lk_active_pid = first_pid
-        names = list(self._lk_players.values())
-        self._lk_player_var.set(names[0])
-        self._lk_player_menu.configure(values=names, state="normal")
         self._lk_set_menu.configure(state="disabled")
         self._lk_start_btn.configure(state="disabled")
         self._lk_end_btn.configure(state="normal")
         self._lk_status.configure(
-            text=f"Session active  ·  {set_name}  ·  {len(names)} players",
+            text=f"Session active  ·  {set_name}  ·  {len(player_names)} players",
             text_color="white")
+        self._lk_rebuild_player_fields()
         self._lk_refresh_scoreboard()
         self._lk_refresh_feed()
-        self._lk_ac.focus()
 
     def _lk_end_session(self):
         if self._lk_session_id is None: return
@@ -1777,9 +2081,8 @@ class VCardTracker(ctk.CTk):
                             f"\U0001f3c6  Winner: {winner_name}  ({winner_score} pts)\n\n{lines}")
         self._lk_session_id = None
         self._lk_players    = {}
-        self._lk_active_pid = None
-        self._lk_player_var.set("—")
-        self._lk_player_menu.configure(values=["—"], state="disabled")
+        self._lk_player_acs = []
+        for w in self._lk_fields_scroll.winfo_children(): w.destroy()
         self._lk_set_menu.configure(state="normal")
         self._lk_start_btn.configure(state="normal")
         self._lk_end_btn.configure(state="disabled")
@@ -1787,29 +2090,60 @@ class VCardTracker(ctk.CTk):
         self._lk_refresh_scoreboard()
         self._lk_refresh_feed()
 
-    def _lk_on_player_change(self, name):
-        for pid, pname in self._lk_players.items():
-            if pname == name:
-                self._lk_active_pid = pid
-                break
-        self._lk_ac.focus()
-
-    def _lk_add_pull(self, card_name, rarity):
-        if self._lk_session_id is None or self._lk_active_pid is None:
+    def _lk_add_pull_for(self, player_id, card_name, rarity):
+        """Log a pull for a specific player by ID."""
+        if self._lk_session_id is None:
             return
         points, rule = lockout_score_pull(
-            self._lk_session_id, self._lk_active_pid,
+            self._lk_session_id, player_id,
             card_name, rarity, self._lk_set_name)
-        db_log_lockout_pull(
-            self._lk_session_id, self._lk_active_pid,
+        pull_id = db_log_lockout_pull(
+            self._lk_session_id, player_id,
             card_name, rarity, points, rule)
-        self._lk_refresh_scoreboard()
-        self._lk_refresh_feed()
-        self._lk_ac.focus()
+        self._lk_update_scores()
+        self._lk_append_feed_row(
+            pull_id, player_id,
+            self._lk_players.get(player_id, "?"),
+            card_name, rarity, points, rule)
+
+    def _lk_rebuild_player_fields(self):
+        """Build one labeled AutocompleteEntry per player, Tab cycles between them."""
+        for w in self._lk_fields_scroll.winfo_children(): w.destroy()
+        self._lk_player_acs = []
+
+        for pid, pname in self._lk_players.items():
+            block = ctk.CTkFrame(self._lk_fields_scroll, fg_color="#1a1a2a", corner_radius=8)
+            block.pack(fill="x", padx=4, pady=4)
+            ctk.CTkLabel(block, text=pname, anchor="w",
+                         font=ctk.CTkFont(size=12, weight="bold"),
+                         text_color="#90caf9").pack(anchor="w", padx=10, pady=(8,2))
+            ac = AutocompleteEntry(
+                block,
+                get_cards_fn=lambda: [(n, r) for n, r in
+                                       CARD_DB.get(self._lk_set_var.get(), [])
+                                       if r not in ("Box Topper", "God Rare")],
+                on_select_fn=lambda n, r, p=pid: self._lk_add_pull_for(p, n, r),
+                placeholder=f"Card for {pname}…",
+            )
+            ac.pack(fill="x", padx=10, pady=(0,10))
+            self._lk_player_acs.append((pid, ac))
+
+        # Wire Tab key: each entry's Tab focuses the next player's entry
+        entries = [ac._entry for _, ac in self._lk_player_acs]
+        for i, entry in enumerate(entries):
+            next_entry = entries[(i + 1) % len(entries)]
+            entry.bind("<Tab>", lambda e, ne=next_entry: (ne.focus_set(), "break"),
+                       add=False)
+
+        # Focus first field
+        if self._lk_player_acs:
+            self._lk_player_acs[0][1].focus()
 
     def _lk_refresh_scoreboard(self):
-        for w in self._lk_score_list.winfo_children():    w.destroy()
-        for w in self._lk_locked_list.winfo_children():   w.destroy()
+        """Full rebuild — called on session start/end only."""
+        for w in self._lk_score_list.winfo_children():  w.destroy()
+        for w in self._lk_locked_list.winfo_children(): w.destroy()
+        self._lk_score_labels = {}
         if not self._lk_session_id:
             ctk.CTkLabel(self._lk_score_list, text="—", text_color="#555").pack(pady=10)
             return
@@ -1825,10 +2159,44 @@ class VCardTracker(ctk.CTk):
                          font=ctk.CTkFont(size=11)).pack(side="left", padx=(6,2), pady=7)
             ctk.CTkLabel(row, text=name, anchor="w", text_color=color,
                          font=ctk.CTkFont(size=12, weight="bold")).pack(side="left", fill="x", expand=True)
-            ctk.CTkLabel(row, text=f"{score} pts", text_color=color,
-                         font=ctk.CTkFont(size=12, weight="bold")).pack(side="right", padx=8)
+            s_lbl = ctk.CTkLabel(row, text=f"{score} pts", text_color=color,
+                                  font=ctk.CTkFont(size=12, weight="bold"))
+            s_lbl.pack(side="right", padx=8)
+            self._lk_score_labels[pid] = (color, s_lbl)
 
-        # Locked VTubers
+        ctk.CTkLabel(self._lk_locked_list, text="None yet", text_color="#555",
+                     font=ctk.CTkFont(size=10)).pack(pady=4)
+
+    def _lk_delete_pull(self, pull_id, player_id, card_name, rarity, row_widget):
+        """Delete a pull, roll back scoring, rebuild feed and scores."""
+        msg = "Delete  " + card_name + "  [" + rarity + "]?\nPoints will be recalculated."
+        if not messagebox.askyesno("Delete Pull", msg):
+            return
+        db_delete_lockout_pull(
+            pull_id, self._lk_session_id, player_id,
+            card_name, rarity, self._lk_set_name)
+        # Full feed rebuild (deletion is rare, correctness matters)
+        self._lk_refresh_feed()
+        self._lk_update_scores()
+
+    def _lk_update_scores(self):
+        """Incremental update — just refreshes score numbers and locked list."""
+        if not self._lk_session_id:
+            return
+        scores = db_get_lockout_scores(self._lk_session_id)
+
+        # If a new player row doesn't exist yet, do a full rebuild
+        if set(scores.keys()) != set(self._lk_score_labels.keys()):
+            self._lk_refresh_scoreboard()
+            return
+
+        # Update score labels in place (no widget destruction)
+        for pid, (color, s_lbl) in self._lk_score_labels.items():
+            _, score = scores[pid]
+            s_lbl.configure(text=f"{score} pts")
+
+        # Rebuild locked list (small, infrequent)
+        for w in self._lk_locked_list.winfo_children(): w.destroy()
         con = _con()
         locked = con.execute(
             "SELECT lv.vtuber_name, lp.name FROM lockout_locked_vtubers lv "
@@ -1838,6 +2206,7 @@ class VCardTracker(ctk.CTk):
         if not locked:
             ctk.CTkLabel(self._lk_locked_list, text="None yet", text_color="#555",
                          font=ctk.CTkFont(size=10)).pack(pady=4)
+            return
         for vname, pname in locked:
             row = ctk.CTkFrame(self._lk_locked_list, fg_color="#1a1a1a", corner_radius=4)
             row.pack(fill="x", padx=2, pady=1)
@@ -1848,6 +2217,7 @@ class VCardTracker(ctk.CTk):
                          font=ctk.CTkFont(size=10)).pack(side="right", padx=4)
 
     def _lk_refresh_feed(self):
+        """Full rebuild — called on session start/end only."""
         for w in self._lk_feed.winfo_children(): w.destroy()
         if not self._lk_session_id:
             ctk.CTkLabel(self._lk_feed, text="Start a session to begin.",
@@ -1858,36 +2228,51 @@ class VCardTracker(ctk.CTk):
             ctk.CTkLabel(self._lk_feed, text="No pulls yet.",
                          text_color="#555").pack(pady=30)
             return
-        for pname, cname, rarity, points, rule, pulled_at in rows:
+        for pull_id, pname, player_id, cname, rarity, points, rule, pulled_at in rows:
             try:    ts = datetime.fromisoformat(pulled_at).strftime("%H:%M:%S")
             except: ts = "—"
-            color  = RARITY_COLORS.get(rarity, "#888")
-            pt_clr = "#ffd54f" if points > 0 else "#555"
-            row    = ctk.CTkFrame(self._lk_feed, fg_color="#1e1e1e", corner_radius=5)
-            row.pack(fill="x", padx=4, pady=2)
-            # timestamp
-            ctk.CTkLabel(row, text=ts, width=58, text_color="#555",
-                         font=ctk.CTkFont(size=10)).pack(side="left", padx=(6,0), pady=5)
-            # player
-            ctk.CTkLabel(row, text=pname, width=90, anchor="w", text_color="#ccc",
-                         font=ctk.CTkFont(size=11, weight="bold")).pack(side="left", padx=(4,0))
-            # dot + card
-            ctk.CTkLabel(row, text="●", text_color=color,
-                         font=ctk.CTkFont(size=12)).pack(side="left", padx=(4,2))
-            inner = ctk.CTkFrame(row, fg_color="transparent")
-            inner.pack(side="left", fill="x", expand=True, padx=(0,4))
-            ctk.CTkLabel(inner, text=cname, anchor="w",
-                         font=ctk.CTkFont(size=11, weight="bold")).pack(anchor="w")
-            if rule:
-                ctk.CTkLabel(inner, text=rule, anchor="w", text_color="#e040fb",
-                             font=ctk.CTkFont(size=10)).pack(anchor="w")
-            # points
-            pt_txt = f"+{points}" if points > 0 else "—"
-            ctk.CTkLabel(row, text=pt_txt, width=36, text_color=pt_clr,
-                         font=ctk.CTkFont(size=12, weight="bold")).pack(side="right", padx=8)
-            # rarity
-            ctk.CTkLabel(row, text=rarity, text_color=color,
-                         font=ctk.CTkFont(size=10)).pack(side="right", padx=(0,4))
+            self._lk_build_feed_row(pull_id, player_id, pname, cname, rarity, points, rule, ts)
+
+    def _lk_append_feed_row(self, pull_id, player_id, pname, cname, rarity, points, rule):
+        """Append a single new row at the bottom — O(1), no rebuild."""
+        # Remove placeholder label if present
+        children = self._lk_feed.winfo_children()
+        if len(children) == 1 and isinstance(children[0], ctk.CTkLabel):
+            children[0].destroy()
+        ts = datetime.now().strftime("%H:%M:%S")
+        self._lk_build_feed_row(pull_id, player_id, pname, cname, rarity, points, rule, ts)
+        # Scroll to bottom so latest pull is always visible
+        self._lk_feed._parent_canvas.yview_moveto(1.0)
+
+    def _lk_build_feed_row(self, pull_id, player_id, pname, cname, rarity, points, rule, ts):
+        color  = RARITY_COLORS.get(rarity, "#888")
+        pt_clr = "#ffd54f" if points > 0 else "#555"
+        row    = ctk.CTkFrame(self._lk_feed, fg_color="#1e1e1e", corner_radius=5)
+        row.pack(fill="x", padx=4, pady=2)
+        # Delete button
+        ctk.CTkButton(row, text="✕", width=24, height=24,
+                      fg_color="#3a1a1a", hover_color="#5a2a2a",
+                      command=lambda: self._lk_delete_pull(
+                          pull_id, player_id, cname, rarity, row)
+                      ).pack(side="left", padx=(6,2), pady=5)
+        ctk.CTkLabel(row, text=ts, width=52, text_color="#555",
+                     font=ctk.CTkFont(size=10)).pack(side="left", padx=(0,0), pady=5)
+        ctk.CTkLabel(row, text=pname, width=90, anchor="w", text_color="#ccc",
+                     font=ctk.CTkFont(size=11, weight="bold")).pack(side="left", padx=(4,0))
+        ctk.CTkLabel(row, text="●", text_color=color,
+                     font=ctk.CTkFont(size=12)).pack(side="left", padx=(4,2))
+        inner = ctk.CTkFrame(row, fg_color="transparent")
+        inner.pack(side="left", fill="x", expand=True, padx=(0,4))
+        ctk.CTkLabel(inner, text=cname, anchor="w",
+                     font=ctk.CTkFont(size=11, weight="bold")).pack(anchor="w")
+        if rule:
+            ctk.CTkLabel(inner, text=rule, anchor="w", text_color="#e040fb",
+                         font=ctk.CTkFont(size=10)).pack(anchor="w")
+        pt_txt = f"+{points}" if points > 0 else "—"
+        ctk.CTkLabel(row, text=pt_txt, width=36, text_color=pt_clr,
+                     font=ctk.CTkFont(size=12, weight="bold")).pack(side="right", padx=8)
+        ctk.CTkLabel(row, text=rarity, text_color=color,
+                     font=ctk.CTkFont(size=10)).pack(side="right", padx=(0,4))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
